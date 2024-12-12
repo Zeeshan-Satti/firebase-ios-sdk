@@ -1291,12 +1291,12 @@ extension User: NSSecureCoding {}
       }
     }
     providerDataRaw = providerData
-    #if os(iOS)
-      if let enrollments = user.mfaEnrollments {
-        multiFactor = MultiFactor(withMFAEnrollments: enrollments)
-      }
-      multiFactor.user = self
-    #endif
+//    #if os(iOS)
+//      if let enrollments = user.mfaEnrollments {
+//        multiFactor = MultiFactor(withMFAEnrollments: enrollments)
+//      }
+//      multiFactor.user = self
+//    #endif
   }
 
   #if os(iOS)

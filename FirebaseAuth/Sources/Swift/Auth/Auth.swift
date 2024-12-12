@@ -366,6 +366,49 @@ extension Auth: AuthInterop {
     }
   }
 
+   @objc(verifyWithCode:completion:)
+  open func verify(withCode code: String,
+                       completion: ((AuthDataResult?, Error?) -> Void)? = nil) {
+      kAuthGlobalWorkQueue.async {
+          let decoratedCallback = self.signInFlowAuthDataResultCallback(byDecorating: completion)
+          Task {
+              let resolver = MFAResolver.mfaResolver
+              let multiFactorInfo = resolver?.hints[0]
+
+              if (multiFactorInfo?.factorID == TOTPMultiFactorID) {
+                  let assertion = TOTPMultiFactorGenerator.assertionForSignIn(
+                    withEnrollmentID: multiFactorInfo?.uid ?? "",
+                    oneTimePassword: code)
+                  do {
+                      let authResult = try await resolver?.resolveSignIn(with: assertion)
+                      MFAResolver.mfaResolver = nil
+                      MFAResolver.verificationId = nil
+                      decoratedCallback(authResult, nil)
+                  } catch {
+                      decoratedCallback(nil, error)
+                  }
+              } else if (multiFactorInfo?.factorID == PhoneMultiFactorID) {
+                  print(MFAResolver.verificationId)
+                  let credential = PhoneAuthProvider.provider().credential(
+                    withVerificationID: MFAResolver.verificationId ?? "",
+                    verificationCode: code)
+
+                  let assertion = PhoneMultiFactorGenerator.assertion(with: credential)
+                  resolver?.resolveSignIn(with: assertion) { (authResult, error) in
+                      if (authResult != nil) {
+                          MFAResolver.mfaResolver = nil
+                          MFAResolver.verificationId = nil
+                          decoratedCallback(authResult, nil)
+                          return
+                      }
+
+                      decoratedCallback(nil, error)
+                  }
+              }
+          }
+      }
+  }
+
   /// Signs in using an email address and password.
   ///
   /// When [Email Enumeration
@@ -637,7 +680,7 @@ extension Auth: AuthInterop {
                                                                       isReauthentication: false)
           decoratedCallback(authData, nil)
         } catch {
-          decoratedCallback(nil, error)
+            decoratedCallback(nil, error)
         }
       }
     }
@@ -2226,9 +2269,44 @@ extension Auth: AuthInterop {
       }
     return { authResult, error in
       if let error {
-        authDataCallback(callback, nil, error)
-        return
+          if (error as NSError).code == AuthErrorCode.secondFactorRequired.rawValue {
+              let resolver = ((error as NSError).userInfo["FIRAuthErrorUserInfoMultiFactorResolverKey"] as! FirebaseAuth.MultiFactorResolver)
+
+              let errorString = error.localizedDescription;
+              let userInfo : [String: Any] = [
+                  NSLocalizedDescriptionKey: errorString,
+                  "FIRAuthErrorUserInfoNameKey": "ERROR_SECOND_FACTOR_REQUIRED",
+              ];
+
+              let SecondFactorError = NSError(domain: "", code: AuthErrorCode.secondFactorRequired.rawValue, userInfo: userInfo)
+
+              MFAResolver.mfaResolver = resolver;
+              if (resolver.hints[0].factorID == PhoneMultiFactorID) {
+                  let hint = resolver.hints[0] as! PhoneMultiFactorInfo
+                  PhoneAuthProvider.provider().verifyPhoneNumber(
+                    with: hint,
+                    uiDelegate: nil,
+                    multiFactorSession: resolver.session
+                  ) { (verificationId, error) in
+                      if (error != nil) {
+                          authDataCallback(callback, nil, error)
+                          return
+                      }
+
+                    // verificationId will be needed for sign-in completion.
+                      MFAResolver.verificationId = verificationId
+                      authDataCallback(callback, nil, SecondFactorError)
+                  }
+              } else {
+                  authDataCallback(callback, nil, SecondFactorError)
+              }
+          } else {
+              authDataCallback(callback, nil, error)
+          }
+
+          return
       }
+
       do {
         try self.updateCurrentUser(authResult?.user, byForce: false, savingToDisk: true)
       } catch {
@@ -2391,4 +2469,9 @@ extension Auth: AuthInterop {
   ///
   /// Mutations should occur within a @synchronized(self) context.
   private var listenerHandles: NSMutableArray = []
+}
+
+class MFAResolver {
+    static var mfaResolver: FirebaseAuth.MultiFactorResolver?
+    static var verificationId: String?
 }
