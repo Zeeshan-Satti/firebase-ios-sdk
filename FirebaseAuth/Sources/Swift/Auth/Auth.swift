@@ -366,7 +366,17 @@ extension Auth: AuthInterop {
     }
   }
 
-   @objc(verifyWithCode:completion:)
+    @objc(getCurrentMFATypeWithCompletion:)
+    open func getCurrentMFAType(withCompletion completion: ((String?) -> Void)? = nil) {
+        // Perform asynchronous work on a global queue
+        kAuthGlobalWorkQueue.async {
+            let factorId = MFAResolver.mfaResolver?.hints.first?.factorID ?? ""
+            let displayName = MFAResolver.mfaResolver?.hints.first?.displayName ?? ""
+            completion?("\(factorId) \(displayName)")
+        }
+    }
+
+  @objc(verifyWithCode:completion:)
   open func verify(withCode code: String,
                        completion: ((AuthDataResult?, Error?) -> Void)? = nil) {
       kAuthGlobalWorkQueue.async {
@@ -388,7 +398,6 @@ extension Auth: AuthInterop {
                       decoratedCallback(nil, error)
                   }
               } else if (multiFactorInfo?.factorID == PhoneMultiFactorID) {
-                  print(MFAResolver.verificationId)
                   let credential = PhoneAuthProvider.provider().credential(
                     withVerificationID: MFAResolver.verificationId ?? "",
                     verificationCode: code)
